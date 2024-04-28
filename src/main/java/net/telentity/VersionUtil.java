@@ -49,8 +49,22 @@ public class VersionUtil {
     }
 
     public static boolean brokenTpCauses() {
-        // TODO Figure out which versions of CraftBukkit incorrectly use TeleportCause.UNKNOWN
-        // Returning true for all versions is fine until then. Likely no one will notice.
+        // Returning TRUE for all versions until I isolate the problematic versions is fine.
+        // If a player teleports less than sqrt(3.5) blocks and the TeleportCause == UNKNOWN
+        // Telentity will assume it's a dismount instead of a teleport.
+        //
+        // Most plugins by default use the PLUGIN cause, and it's rare to teleport less than
+        // 2 blocks anyway.
+        //
+        // If you want to encounter this edge case for yourself, do the following:
+        // Step 1: Use a legacy server build - 1.8.8 should do the trick.
+        // Step 2: While in-game (while OP) get into a boat.
+        // Step 3: Run the following command: /minecraft:tp ~ ~ ~
+        // Outcome: The boat doesn't teleport with you. You've hit the edge case!
+        // However, since you teleported no where, the boat didn't really need to teleport anyway.
+
+        // Conclusion: Just return TRUE every time. Fleshing out this function is not a priority,
+        // I'll get to it at some point.
         return true;
     }
 

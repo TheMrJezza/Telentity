@@ -2,7 +2,6 @@ package net.telentity;
 
 import net.telentity.api.PreventionManager;
 import net.telentity.api.TeleportReason;
-import net.telentity.preventors.TelentityPermissions;
 import org.bukkit.Location;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
@@ -13,6 +12,8 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.event.vehicle.VehicleExitEvent;
+import org.bukkit.permissions.Permission;
+import org.bukkit.permissions.PermissionDefault;
 import org.bukkit.plugin.PluginManager;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -26,14 +27,39 @@ public final class Telentity extends JavaPlugin implements Listener {
     @Override
     public void onEnable() {
         final PluginManager pm = getServer().getPluginManager();
-        final BukkitScheduler sch = getServer().getScheduler();
+
+        // Register Basic Permissions
+        final String permFmt = "telentity.%s.%s";
+        for (final EntityType entity : EntityType.values()) {
+            final String type = entity.name().toLowerCase();
+
+            // "telentity.teleport.<entity_type>"
+            final Permission parent = new Permission(String.format(permFmt, "teleport", type), PermissionDefault.OP);
+            pm.addPermission(parent);
+
+            // "telentity.<reason>.<entity_type>"
+            for (final TeleportReason teleportReason : TeleportReason.values()) {
+                final String reason = teleportReason.name().toLowerCase().split("_")[0];
+
+                final Permission subPerm = new Permission(String.format(permFmt, reason, type), PermissionDefault.OP);
+                subPerm.addParent(parent, true);
+                pm.addPermission(subPerm);
+            }
+        }
+
+        // Setup Permissions
+        MiddleMan.INSTANCE.register((player, entity, destination, reason) -> {
+            if (player.isOp()) return false;
+            final String reasonName = reason.name().toLowerCase().split("_")[0];
+            return !player.hasPermission(String.format(permFmt, reasonName, entity.getName()));
+        });
+
 
         getServer().getServicesManager().register(
                 PreventionManager.class, MiddleMan.INSTANCE, this, ServicePriority.Highest
         );
 
-        // Setup Permissions, using the Services Manager just like any 3rd party preventor would.
-        new TelentityPermissions(this);
+        final BukkitScheduler sch = getServer().getScheduler();
 
         // This cache must be emptied at the end of every tick. How you do that is up to you.
         final HashMap<Player, Entity> previousVehicleCache = new HashMap<>();
@@ -99,7 +125,7 @@ public final class Telentity extends JavaPlugin implements Listener {
                 antiInterpolatedTeleport(leashed, to, 3, () -> {
                     leashed.setLeashHolder(player);
                     VersionUtil.visualBugCorrection(player, leashed);
-                });
+                }, sch);
             });
 
             final Entity vehicle = previousVehicleCache.computeIfAbsent(player, p -> {
@@ -126,7 +152,7 @@ public final class Telentity extends JavaPlugin implements Listener {
                     antiInterpolatedTeleport(pass[0], to, 2, () -> {
                         VersionUtil.visualBugCorrection(player, vehicle);
                         VersionUtil.tryAddPassenger(vehicle, pass[0]);
-                    });
+                    }, sch);
                 } else pass[0].leaveVehicle();
                 pass[0] = vehicle.getPassenger();
             }
@@ -137,30 +163,60 @@ public final class Telentity extends JavaPlugin implements Listener {
             antiInterpolatedTeleport(vehicle, to, 1, () -> {
                 VersionUtil.visualBugCorrection(player, vehicle);
                 VersionUtil.tryAddPassenger(vehicle, player);
-            });
+            }, sch);
         }, this, true);
     }
 
+    // This is the most reliable and least intrusive cross-version method of
+    // preventing interpolation I can think of. Trust me, I've tried a lot.
+    // However, it does absolutely nothing to stop directional interpolation.
     private void antiInterpolatedTeleport(
             @NotNull final Entity entity, @NotNull final Location to,
-            long delay, @NotNull Runnable complete
+            long delay, @NotNull Runnable onComplete, @NotNull BukkitScheduler sch
     ) {
+        // Eject and teleport the entity to the final location.
         entity.eject();
         entity.teleport(to);
+        entity.setFallDistance(-Float.MAX_VALUE);
+
+        // Check if we need to do something "hacky"
         if (!VersionUtil.nativeCorrectionsAvailable()) {
+
+            // sigh... let's get hacking...
             if (to.getWorld().equals(entity.getWorld())) {
+
+                // When you make an entity a passenger of another, they instantly
+                // teleport to the vehicle entity position hence avoiding interpolation.
+                // I like using arrows. You can use whatever really. Someone reviewing this might
+                // scream at me for not using invisible armour stands for this... I don't care.
                 final Location point = to.clone().subtract(0, .25, 0);
                 final Entity proxy = to.getWorld().spawnEntity(point, EntityType.ARROW);
+
+                // This is a futile attempt to correct the direction of the arrow.
+                // It makes the direction consistently wrong, the alternative is motion sickness.
                 proxy.teleport(point);
+
+                // Set out entity as a passenger of the arrow, remember, this happens instantly
+                // and avoids interpolation.
                 VersionUtil.tryAddPassenger(proxy, entity);
-                this.getServer().getScheduler().runTaskLater(this, () -> {
+
+                // Wait a couple of ticks for good luck
+                sch.runTaskLater(this, () -> {
                     proxy.eject();
                     proxy.remove();
+
+                    // Yet another attempt to correct the direction of the entity.
+                    // As previously started, this method does nothing to combat
+                    // directional interpolation. But I still keep trying...
                     entity.teleport(to);
                 }, 2);
+
+                // delay the completion callback the very same couple of "good luck" ticks.
                 delay += 2;
             }
         }
-        this.getServer().getScheduler().runTaskLater(this, complete, delay);
+
+        // execute the completion callback
+        sch.runTaskLater(this, onComplete, delay);
     }
 }
