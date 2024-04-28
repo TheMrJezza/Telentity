@@ -1,7 +1,0 @@
-net\telentity\api\Preventor.class
-net\telentity\Telentity.class
-net\telentity\api\PreventionManager.class
-net\telentity\VersionUtil.class
-net\telentity\MiddleMan.class
-net\telentity\api\TeleportReason.class
-net\telentity\preventors\TelentityPermissions.class
