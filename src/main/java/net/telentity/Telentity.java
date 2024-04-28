@@ -82,7 +82,6 @@ public final class Telentity extends JavaPlugin implements Listener {
                 case "SPECTATE":
                 case "DISMOUNT":
                 case "EXIT_BED":
-                case "MOUNT": // MOUNT doesn't exist, I'm trying to future-proof the plugin.
                     return;
             }
 
