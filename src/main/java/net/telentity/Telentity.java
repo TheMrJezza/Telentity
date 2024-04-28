@@ -28,8 +28,6 @@ public final class Telentity extends JavaPlugin implements Listener {
         final BukkitScheduler sch = getServer().getScheduler();
 
         MiddleMan.INSTANCE.register((player, entity, destination, trigger) -> {
-            // TODO Implement Permissions here?
-
             // TRUE means the teleport won't happen. FALSE means it will
             return false;
         });
