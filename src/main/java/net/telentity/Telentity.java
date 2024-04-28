@@ -2,6 +2,7 @@ package net.telentity;
 
 import net.telentity.api.PreventionManager;
 import net.telentity.api.TeleportReason;
+import net.telentity.preventors.TelentityPermissions;
 import org.bukkit.Location;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
@@ -27,14 +28,12 @@ public final class Telentity extends JavaPlugin implements Listener {
         final PluginManager pm = getServer().getPluginManager();
         final BukkitScheduler sch = getServer().getScheduler();
 
-        MiddleMan.INSTANCE.register((player, entity, destination, trigger) -> {
-            // TRUE means the teleport won't happen. FALSE means it will
-            return false;
-        });
-
         getServer().getServicesManager().register(
                 PreventionManager.class, MiddleMan.INSTANCE, this, ServicePriority.Highest
         );
+
+        // Setup Permissions, using the Services Manager just like any 3rd party preventor would.
+        new TelentityPermissions(this);
 
         // This cache must be emptied at the end of every tick. How you do that is up to you.
         final HashMap<Player, Entity> previousVehicleCache = new HashMap<>();
