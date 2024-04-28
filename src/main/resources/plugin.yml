@@ -1,0 +1,8 @@
+main: "net.telentity.Telentity"
+name: "Telentity"
+version: ${project.version}
+
+# Telentity will function on all versions.
+# Whether 3rd 'Preventors' function relies on the
+# individual Preventors themselves.
+api-version: "1.13"

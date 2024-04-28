@@ -1,0 +1,5 @@
+main: "net.telentity.Telentity"
+name: "Telentity"
+version: "0.2.2"
+api-version: "1.13"
+softdepend: [ ProtocolLib ]
