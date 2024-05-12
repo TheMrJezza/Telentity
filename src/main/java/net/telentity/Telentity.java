@@ -1,222 +1,43 @@
 package net.telentity;
 
-import net.telentity.api.PreventionManager;
-import net.telentity.api.TeleportReason;
-import org.bukkit.Location;
-import org.bukkit.entity.Entity;
-import org.bukkit.entity.EntityType;
-import org.bukkit.entity.LivingEntity;
-import org.bukkit.entity.Player;
-import org.bukkit.event.EventPriority;
-import org.bukkit.event.Listener;
-import org.bukkit.event.entity.EntityEvent;
-import org.bukkit.event.player.PlayerTeleportEvent;
-import org.bukkit.event.vehicle.VehicleExitEvent;
-import org.bukkit.permissions.Permission;
-import org.bukkit.permissions.PermissionDefault;
-import org.bukkit.plugin.PluginManager;
+import net.telentity.api.registrable.RegiStore;
+import net.telentity.api.tools.EntityTools;
+import net.telentity.store.MainRegiStore;
+import net.telentity.teleport.PlayerTeleportListener;
+import net.telentity.teleport.handler.LeashTeleportHandle;
+import net.telentity.teleport.handler.NearbySittableTeleportHandle;
+import net.telentity.teleport.handler.VehiclePassengerTeleportHandle;
+import net.telentity.teleport.handler.VehicleTeleportHandle;
+import net.telentity.teleport.prevent.TelentityPermissions;
+import net.telentity.toolkit.MainEntityTools;
+import net.telentity.unmount.UnmountResolver;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitScheduler;
-import org.jetbrains.annotations.NotNull;
 
-import java.util.HashMap;
-
-public final class Telentity extends JavaPlugin implements Listener {
-
-    @Override
+public final class Telentity extends JavaPlugin {
     public void onEnable() {
-        final PluginManager pm = getServer().getPluginManager();
+        final var regiStore = new MainRegiStore(this);
+        final var entityTools = new MainEntityTools(this);
+        final var unmount = new UnmountResolver(entityTools, this).getUnmount();
+        final var vehicleHandle = new VehicleTeleportHandle(unmount, entityTools);
+        final var passengerHandle = new VehiclePassengerTeleportHandle(vehicleHandle, entityTools);
 
-        // Register Basic Permissions
-        final String permFmt = "telentity.%s.%s";
-        for (final EntityType entity : EntityType.values()) {
-            final String type = entity.name().toLowerCase();
+        regiStore.getTeleportHandleStore().register(vehicleHandle);
+        regiStore.getTeleportHandleStore().register(passengerHandle);
+        regiStore.getTeleportHandleStore().register(new LeashTeleportHandle());
+        regiStore.getTeleportHandleStore().register(new NearbySittableTeleportHandle());
+        regiStore.getTeleportPreventorStore().register(new TelentityPermissions());
 
-            // "telentity.teleport.<entity_type>"
-            final Permission parent = new Permission(String.format(permFmt, "teleport", type), PermissionDefault.OP);
-            pm.addPermission(parent);
+        final var rsp = getServer().getServicesManager();
+        rsp.register(RegiStore.class, regiStore, this, ServicePriority.Highest);
+        rsp.register(EntityTools.class, entityTools, this, ServicePriority.Highest);
 
-            // "telentity.<reason>.<entity_type>"
-            for (final TeleportReason teleportReason : TeleportReason.values()) {
-                final String reason = teleportReason.name().toLowerCase().split("_")[0];
-
-                final Permission subPerm = new Permission(String.format(permFmt, reason, type), PermissionDefault.OP);
-                subPerm.addParent(parent, true);
-                pm.addPermission(subPerm);
+        getServer().getPluginManager().getPermissions().forEach(permission -> {
+            if (permission.getName().startsWith("telentity")) {
+                getLogger().info(permission.getName());
             }
-        }
-
-        // Setup Permissions
-        MiddleMan.INSTANCE.register((player, entity, destination, reason) -> {
-            if (player.isOp()) return false;
-            final String reasonName = reason.name().toLowerCase().split("_")[0];
-            return !player.hasPermission(String.format(permFmt, reasonName, entity.getName()));
         });
 
-
-        getServer().getServicesManager().register(
-                PreventionManager.class, MiddleMan.INSTANCE, this, ServicePriority.Highest
-        );
-
-        final BukkitScheduler sch = getServer().getScheduler();
-
-        // This cache must be emptied at the end of every tick. How you do that is up to you.
-        final HashMap<Player, Entity> previousVehicleCache = new HashMap<>();
-
-        // Listen for when entities stop being passengers of other entities.
-        // We only care about this event if it is called before the PlayerTeleportEvent.
-        // Usually for vanilla teleport mechanics, and poorly written plugins.
-        pm.registerEvent(VersionUtil.EJECTION_LISTENER_CLASS, this, EventPriority.MONITOR, (l, e) -> {
-            final Entity vehicle, ejected;
-            if (e instanceof VehicleExitEvent) {
-                vehicle = ((VehicleExitEvent) e).getVehicle();
-                ejected = ((VehicleExitEvent) e).getExited();
-            } else if (e instanceof EntityEvent) {
-                ejected = ((EntityEvent) e).getEntity();
-                if (null == (vehicle = VersionUtil.tryReadDismounted((EntityEvent) e))) return;
-            } else return;
-
-            // Do nothing if the player was already cached in the PlayerTeleportEvent
-            if (!(ejected instanceof Player) || previousVehicleCache.containsKey(ejected)) return;
-
-            // Make sure the player is the "main passenger", i.e. the one controlling the entity.
-            // Always true on older MC versions since they do not support multiple passengers.
-            if (!ejected.equals(vehicle.getPassenger())) return;
-
-            previousVehicleCache.put((Player) ejected, vehicle);
-            sch.runTask(this, () -> previousVehicleCache.remove(ejected));
-        }, this, true);
-
-        pm.registerEvent(PlayerTeleportEvent.class, this, EventPriority.MONITOR, (l, e) -> {
-
-            // Ignore this event if it's called because of something irrelevant.
-            final Location to = ((PlayerTeleportEvent) e).getTo();
-            if (to == null) return;
-
-            final Location from = ((PlayerTeleportEvent) e).getFrom();
-            if (from == null) return;
-
-            // using names here on purpose.
-            switch (((PlayerTeleportEvent) e).getCause().name()) {
-                // CraftBukkit 1.8.x (and potentially other versions) use UNKNOWN in places it shouldn't
-                // Therefore, we also check the squared distance > 3.5 - This is 95% effective.
-                case "UNKNOWN": if (VersionUtil.brokenTpCauses()) {
-                    if (!to.getWorld().equals(from.getWorld()) || to.distanceSquared(from) > 3.5) break;
-                }
-                case "SPECTATE":
-                case "DISMOUNT":
-                case "EXIT_BED":
-                    return;
-            }
-
-            final Player player = ((PlayerTeleportEvent) e).getPlayer();
-
-            player.getNearbyEntities(12, 12, 12).stream().filter(entity -> {
-                if (!(entity instanceof LivingEntity) || !((LivingEntity) entity).isLeashed()) return false;
-                return player.equals(((LivingEntity) entity).getLeashHolder());
-            }).map(entity -> (LivingEntity) entity).filter(living ->
-                    !MiddleMan.INSTANCE.isPrevented(player, living, to, TeleportReason.LEASHED_TO_PLAYER)
-            ).forEach(leashed -> {
-                leashed.setLeashHolder(null);
-                VersionUtil.visualBugPrevention(player, leashed);
-                // Take note of the delay here... It's 3. Make this whatever you want,
-                // but make sure it's HIGHER than the passenger delay below.
-                antiInterpolatedTeleport(leashed, to, 3, () -> {
-                    leashed.setLeashHolder(player);
-                    VersionUtil.visualBugCorrection(player, leashed);
-                }, sch);
-            });
-
-            final Entity vehicle = previousVehicleCache.computeIfAbsent(player, p -> {
-                final Entity currentVehicle = p.getVehicle();
-                sch.runTask(this, () -> previousVehicleCache.remove(p));
-                if (currentVehicle == null || !p.equals(currentVehicle.getPassenger())) return null;
-                return currentVehicle;
-            });
-
-            // Make sure we have a vehicle to teleport
-            if (vehicle == null) return;
-            if (MiddleMan.INSTANCE.isPrevented(player, vehicle, to, TeleportReason.VEHICLE_OF_PLAYER)) {
-                return;
-            }
-
-            // check for passengers
-            final Entity[] pass = {vehicle.getPassenger()};
-            while (pass[0] != null) {
-                if (!MiddleMan.INSTANCE.isPrevented(player, pass[0], to,
-                        TeleportReason.PASSENGER_OF_PLAYERS_VEHICLE)) {
-                    VersionUtil.visualBugPrevention(player, pass[0]);
-                    // Take note of the delay here... It's 2. Make this whatever you want,
-                    // but make sure it's HIGHER than the vehicle delay below.
-                    antiInterpolatedTeleport(pass[0], to, 2, () -> {
-                        VersionUtil.visualBugCorrection(player, vehicle);
-                        VersionUtil.tryAddPassenger(vehicle, pass[0]);
-                    }, sch);
-                } else pass[0].leaveVehicle();
-                pass[0] = vehicle.getPassenger();
-            }
-
-            VersionUtil.visualBugPrevention(player, vehicle);
-            // Take note of the delay here... It's 1. Make this whatever you want,
-            // but make sure it's LOWER than the other delays below.
-            antiInterpolatedTeleport(vehicle, to, 1, () -> {
-                VersionUtil.visualBugCorrection(player, vehicle);
-                VersionUtil.tryAddPassenger(vehicle, player);
-            }, sch);
-        }, this, true);
-    }
-
-    // This is the most reliable and least intrusive cross-version method of
-    // preventing interpolation I can think of. Trust me, I've tried a lot.
-    // However, it does absolutely nothing to stop directional interpolation.
-    private void antiInterpolatedTeleport(
-            @NotNull final Entity entity, @NotNull final Location to,
-            long delay, @NotNull Runnable onComplete, @NotNull BukkitScheduler sch
-    ) {
-        // Eject and teleport the entity to the final location.
-        entity.eject();
-        entity.teleport(to);
-        entity.setFallDistance(-Float.MAX_VALUE);
-
-        // Check if we need to do something "hacky"
-        if (!VersionUtil.nativeCorrectionsAvailable()) {
-
-            // sigh... let's get hacking...
-            if (to.getWorld().equals(entity.getWorld())) {
-
-                // When you make an entity a passenger of another, they instantly
-                // teleport to the vehicle entity position hence avoiding interpolation.
-                // I like using arrows. You can use whatever really. Someone reviewing this might
-                // scream at me for not using invisible armour stands for this... I don't care.
-                final Location point = to.clone().subtract(0, .25, 0);
-                final Entity proxy = to.getWorld().spawnEntity(point, EntityType.ARROW);
-
-                // This is a futile attempt to correct the direction of the arrow.
-                // It makes the direction consistently wrong, the alternative is motion sickness.
-                proxy.teleport(point);
-
-                // Set out entity as a passenger of the arrow, remember, this happens instantly
-                // and avoids interpolation.
-                VersionUtil.tryAddPassenger(proxy, entity);
-
-                // Wait a couple of ticks for good luck
-                sch.runTaskLater(this, () -> {
-                    proxy.eject();
-                    proxy.remove();
-
-                    // Yet another attempt to correct the direction of the entity.
-                    // As previously started, this method does nothing to combat
-                    // directional interpolation. But I still keep trying...
-                    entity.teleport(to);
-                }, 2);
-
-                // delay the completion callback the very same couple of "good luck" ticks.
-                delay += 2;
-            }
-        }
-
-        // execute the completion callback
-        sch.runTaskLater(this, onComplete, delay);
+        new PlayerTeleportListener(this, regiStore, entityTools.getEntityShowHide());
     }
 }
