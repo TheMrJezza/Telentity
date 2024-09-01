@@ -32,12 +32,6 @@ public final class Telentity extends JavaPlugin {
         rsp.register(RegiStore.class, regiStore, this, ServicePriority.Highest);
         rsp.register(EntityTools.class, entityTools, this, ServicePriority.Highest);
 
-        getServer().getPluginManager().getPermissions().forEach(permission -> {
-            if (permission.getName().startsWith("telentity")) {
-                getLogger().info(permission.getName());
-            }
-        });
-
         new PlayerTeleportListener(this, regiStore, entityTools.getEntityShowHide());
     }
 }
